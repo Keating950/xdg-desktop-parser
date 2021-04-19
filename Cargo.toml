@@ -2,6 +2,7 @@
 name = "xdg-desktop-parser"
 version = "0.1.0"
 edition = "2018"
+license = "LGPL-2.1-only"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
