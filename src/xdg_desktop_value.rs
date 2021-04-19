@@ -27,6 +27,10 @@ impl From<f64> for XdgDesktopValue {
     }
 }
 
+lazy_static! {
+    static ref VAL_DELIMITER: Regex = Regex::new(r#"(?<!\\);"#).unwrap();
+}
+
 impl XdgDesktopValue {
     fn parse_string(s: &str) -> XdgParseResult {
         Ok(XdgDesktopValue::String(s.to_string()))
@@ -49,10 +53,7 @@ impl XdgDesktopValue {
     }
 
     fn parse_plural(s: &str, f: fn(&str) -> XdgParseResult) -> XdgParseResult {
-        lazy_static! {
-            static ref DELIMITER: Regex = Regex::new(r#"(?<!\\);"#).unwrap();
-        }
-        let items: Result<Vec<XdgDesktopValue>, _> = DELIMITER.split(s).map(f).collect();
+        let items: Result<Vec<XdgDesktopValue>, _> = VAL_DELIMITER.split(s).map(f).collect();
         Ok(XdgDesktopValue::List(items?))
     }
 
@@ -62,6 +63,29 @@ impl XdgDesktopValue {
                 Regex::new(r#"\[(?:[a-z]{2})(?:_[A-Z]{2})?(?:@\w+)?\]"#).unwrap();
         }
         LOCALE_SUFFIX.replace(s, "")
+    }
+
+    fn try_types(s: &str) -> XdgParseResult {
+        let vals: Vec<&str> = VAL_DELIMITER.split(s).collect();
+        let parse_funcs: [fn(&str) -> XdgParseResult; 3] = match vals.len() {
+            1 => [
+                XdgDesktopValue::parse_bool,
+                XdgDesktopValue::parse_numeric,
+                XdgDesktopValue::parse_string,
+            ],
+            _ => [
+                |s| XdgDesktopValue::parse_plural(s, XdgDesktopValue::parse_bool),
+                |s| XdgDesktopValue::parse_plural(s, XdgDesktopValue::parse_numeric),
+                |s| XdgDesktopValue::parse_plural(s, XdgDesktopValue::parse_string),
+            ],
+        };
+        for f in &parse_funcs {
+            if let Ok(val) = f(s) {
+                return Ok(val);
+            }
+        }
+        // parse_string cannot fail
+        unreachable!()
     }
 
     pub fn from_kv(s: &str) -> (&str, XdgParseResult) {
@@ -98,7 +122,7 @@ impl XdgDesktopValue {
             | "MimeType"
             | "Categories"
             | "Implements" => parse_strings,
-            _ => parse_strings, // TODO: Apply heuristics instead
+            _ => XdgDesktopValue::try_types
         };
         match parse_fn(v) {
             Ok(xdg) => (k, Ok(xdg)),
