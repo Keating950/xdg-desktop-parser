@@ -13,8 +13,6 @@ pub enum XdgDesktopValue {
     List(Vec<XdgDesktopValue>),
 }
 
-pub type XdgParseResult = Result<XdgDesktopValue, XdgParseError>;
-
 impl From<bool> for XdgDesktopValue {
     fn from(b: bool) -> Self {
         XdgDesktopValue::Bool(b)
@@ -27,32 +25,68 @@ impl From<f64> for XdgDesktopValue {
     }
 }
 
+impl From<Vec<XdgDesktopValue>> for XdgDesktopValue {
+    fn from(l: Vec<XdgDesktopValue>) -> Self {
+        XdgDesktopValue::List(l)
+    }
+}
+
+impl Into<String> for XdgDesktopValue {
+    fn into(self) -> String {
+        match self {
+            XdgDesktopValue::IconString(s)
+            | XdgDesktopValue::LocaleString(s)
+            | XdgDesktopValue::String(s) => s.clone(), // I wish I didn't have to clone here
+            XdgDesktopValue::Bool(b) => b.to_string(),
+            XdgDesktopValue::Numeric(n) => n.to_string(),
+            XdgDesktopValue::List(l) => {
+                // Arbitrary size chosen
+                let mut out = String::with_capacity(8 * l.len());
+                for e in l.iter().map(XdgDesktopValue::to_string) {
+                    out.push_str(&e);
+                    out.push(';')
+                }
+                out
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for XdgDesktopValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_string())
+    }
+}
+
 lazy_static! {
     static ref VAL_DELIMITER: Regex = Regex::new(r#"(?<!\\);"#).unwrap();
 }
 
 impl XdgDesktopValue {
-    fn parse_string(s: &str) -> XdgParseResult {
+    fn parse_string(s: &str) -> crate::Result<XdgDesktopValue> {
         Ok(XdgDesktopValue::String(s.to_string()))
     }
 
-    fn parse_locale_string(s: &str) -> XdgParseResult {
+    fn parse_locale_string(s: &str) -> crate::Result<XdgDesktopValue> {
         Ok(XdgDesktopValue::LocaleString(s.to_string()))
     }
 
-    fn parse_icon_string(s: &str) -> XdgParseResult {
+    fn parse_icon_string(s: &str) -> crate::Result<XdgDesktopValue> {
         Ok(XdgDesktopValue::IconString(s.to_string()))
     }
 
-    fn parse_bool(s: &str) -> XdgParseResult {
+    fn parse_bool(s: &str) -> crate::Result<XdgDesktopValue> {
         Ok(s.parse::<bool>()?.into())
     }
 
-    fn parse_numeric(s: &str) -> XdgParseResult {
+    fn parse_numeric(s: &str) -> crate::Result<XdgDesktopValue> {
         Ok(s.parse::<f64>()?.into())
     }
 
-    fn parse_plural(s: &str, f: fn(&str) -> XdgParseResult) -> XdgParseResult {
+    fn parse_plural(
+        s: &str,
+        f: fn(&str) -> crate::Result<XdgDesktopValue>,
+    ) -> crate::Result<XdgDesktopValue> {
         let items: Result<Vec<XdgDesktopValue>, _> = VAL_DELIMITER.split(s).map(f).collect();
         Ok(XdgDesktopValue::List(items?))
     }
@@ -65,30 +99,34 @@ impl XdgDesktopValue {
         LOCALE_SUFFIX.replace(s, "")
     }
 
-    fn try_types(s: &str) -> XdgParseResult {
-        let vals: Vec<&str> = VAL_DELIMITER.split(s).collect();
-        let parse_funcs: [fn(&str) -> XdgParseResult; 3] = match vals.len() {
-            1 => [
-                XdgDesktopValue::parse_bool,
-                XdgDesktopValue::parse_numeric,
-                XdgDesktopValue::parse_string,
-            ],
-            _ => [
-                |s| XdgDesktopValue::parse_plural(s, XdgDesktopValue::parse_bool),
-                |s| XdgDesktopValue::parse_plural(s, XdgDesktopValue::parse_numeric),
-                |s| XdgDesktopValue::parse_plural(s, XdgDesktopValue::parse_string),
-            ],
-        };
-        for f in &parse_funcs {
-            if let Ok(val) = f(s) {
-                return Ok(val);
+    fn try_types(s: &str) -> crate::Result<XdgDesktopValue> {
+        const PARSE_FUNCS: [fn(&str) -> crate::Result<XdgDesktopValue>; 3] = [
+            XdgDesktopValue::parse_bool,
+            XdgDesktopValue::parse_numeric,
+            XdgDesktopValue::parse_string,
+        ];
+        let mut parse_fn: Option<fn(&str) -> crate::Result<XdgDesktopValue>> = None;
+        let mut out: Vec<XdgDesktopValue> = Vec::new();
+        'outer: for v in VAL_DELIMITER.split(s) {
+            match parse_fn {
+                Some(f) => out.push(f(v)?),
+                None => {
+                    for f in &PARSE_FUNCS {
+                        if let Ok(val) = f(s) {
+                            out.push(val);
+                            parse_fn = Some(*f);
+                            continue 'outer;
+                        }
+                    }
+                    // parse_string cannot fail.
+                    unreachable!()
+                }
             }
         }
-        // parse_string cannot fail
-        unreachable!()
+        Ok(XdgDesktopValue::List(out))
     }
 
-    pub fn from_kv(s: &str) -> (&str, XdgParseResult) {
+    pub fn from_kv(s: &str) -> (&str, crate::Result<XdgDesktopValue>) {
         let parse_strings =
             |s: &str| XdgDesktopValue::parse_plural(s, XdgDesktopValue::parse_string);
         let parse_locale_strings =
@@ -141,5 +179,11 @@ mod tests {
         for i in &items {
             assert_eq!("Name", XdgDesktopValue::strip_locale(i), "\nInput: {}\n", i);
         }
+    }
+
+    #[test]
+    fn test_list() {
+        let input = "Keywords=system;process;task";
+        assert!(XdgDesktopValue::from_kv(input).1.is_ok())
     }
 }
