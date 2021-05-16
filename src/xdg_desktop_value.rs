@@ -83,7 +83,10 @@ impl XdgDesktopValue {
         Ok(s.parse::<f64>()?.into())
     }
 
-    fn parse_plural(s: &str, f: fn(&str) -> crate::Result<XdgDesktopValue>) -> crate::Result<XdgDesktopValue> {
+    fn parse_plural(
+        s: &str,
+        f: fn(&str) -> crate::Result<XdgDesktopValue>,
+    ) -> crate::Result<XdgDesktopValue> {
         let items: Result<Vec<XdgDesktopValue>, _> = VAL_DELIMITER.split(s).map(f).collect();
         Ok(XdgDesktopValue::List(items?))
     }
